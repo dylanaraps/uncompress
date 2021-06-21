@@ -1,0 +1,118 @@
+From 8e9170e58171f53c4f84d7031dc07e8f37207de5 Mon Sep 17 00:00:00 2001
+From: Dylan Araps <dylan.araps@gmail.com>
+Date: Mon, 21 Jun 2021 19:07:37 +0000
+Subject: [PATCH] x86: support KERNEL_UNCOMPRESSED
+
+---
+ arch/x86/Kconfig                  |  1 +
+ arch/x86/boot/compressed/Makefile | 16 ++++++-------
+ arch/x86/boot/compressed/misc.c   |  5 ++++
+ lib/decompress_copy.c             | 38 +++++++++++++++++++++++++++++++
+ 4 files changed, 52 insertions(+), 8 deletions(-)
+ create mode 100644 lib/decompress_copy.c
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 861b1b794..2659127c4 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -194,6 +194,7 @@ config X86
+ 	select HAVE_IOREMAP_PROT
+ 	select HAVE_IRQ_EXIT_ON_IRQ_STACK	if X86_64
+ 	select HAVE_IRQ_TIME_ACCOUNTING
++	select HAVE_KERNEL_UNCOMPRESSED
+ 	select HAVE_KERNEL_BZIP2
+ 	select HAVE_KERNEL_GZIP
+ 	select HAVE_KERNEL_LZ4
+diff --git a/arch/x86/boot/compressed/Makefile b/arch/x86/boot/compressed/Makefile
+index 6e5522aeb..1c22b08aa 100644
+--- a/arch/x86/boot/compressed/Makefile
++++ b/arch/x86/boot/compressed/Makefile
+@@ -134,17 +134,17 @@ $(obj)/vmlinux.bin.lz4: $(vmlinux.bin.all-y) FORCE
+ $(obj)/vmlinux.bin.zst: $(vmlinux.bin.all-y) FORCE
+ 	$(call if_changed,zstd22)
+ 
+-suffix-$(CONFIG_KERNEL_GZIP)	:= gz
+-suffix-$(CONFIG_KERNEL_BZIP2)	:= bz2
+-suffix-$(CONFIG_KERNEL_LZMA)	:= lzma
+-suffix-$(CONFIG_KERNEL_XZ)	:= xz
+-suffix-$(CONFIG_KERNEL_LZO) 	:= lzo
+-suffix-$(CONFIG_KERNEL_LZ4) 	:= lz4
+-suffix-$(CONFIG_KERNEL_ZSTD)	:= zst
++suffix-$(CONFIG_KERNEL_GZIP)	:= .gz
++suffix-$(CONFIG_KERNEL_BZIP2)	:= .bz2
++suffix-$(CONFIG_KERNEL_LZMA)	:= .lzma
++suffix-$(CONFIG_KERNEL_XZ)	:= .xz
++suffix-$(CONFIG_KERNEL_LZO) 	:= .lzo
++suffix-$(CONFIG_KERNEL_LZ4) 	:= .lz4
++suffix-$(CONFIG_KERNEL_ZSTD)	:= .zst
+ 
+ quiet_cmd_mkpiggy = MKPIGGY $@
+       cmd_mkpiggy = $(obj)/mkpiggy $< > $@
+ 
+ targets += piggy.S
+-$(obj)/piggy.S: $(obj)/vmlinux.bin.$(suffix-y) $(obj)/mkpiggy FORCE
++$(obj)/piggy.S: $(obj)/vmlinux.bin$(suffix-y) $(obj)/mkpiggy FORCE
+ 	$(call if_changed,mkpiggy)
+diff --git a/arch/x86/boot/compressed/misc.c b/arch/x86/boot/compressed/misc.c
+index 267e7f930..726d378ae 100644
+--- a/arch/x86/boot/compressed/misc.c
++++ b/arch/x86/boot/compressed/misc.c
+@@ -78,6 +78,11 @@ static int lines, cols;
+ #ifdef CONFIG_KERNEL_ZSTD
+ #include "../../../../lib/decompress_unzstd.c"
+ #endif
++
++#ifdef CONFIG_KERNEL_UNCOMPRESSED
++#include "../../../../lib/decompress_copy.c"
++#endif
++
+ /*
+  * NOTE: When adding a new decompressor, please update the analysis in
+  * ../header.S.
+diff --git a/lib/decompress_copy.c b/lib/decompress_copy.c
+new file mode 100644
+index 000000000..08b86953a
+--- /dev/null
++++ b/lib/decompress_copy.c
+@@ -0,0 +1,38 @@
++#include <linux/decompress/mm.h>
++
++#define UNCOM_BUFSZ (16 * 1024)
++
++STATIC int INIT __decompress(unsigned char *buf, long len,
++            long(*fill)(void*, unsigned long),
++            long(*flush)(void*, unsigned long),
++            unsigned char *outbuf, long olen,
++            long *pos,
++            void(*error)(char *x))
++{
++    char *b = buf ? buf : malloc(UNCOM_BUFSZ);
++
++    if (!b) {
++        error("Out of memory");
++        return -1;
++    }
++
++    if (flush) {
++        len = len ? len : fill(b, UNCOM_BUFSZ);
++        len = flush(b, len);
++    } else {
++        if (!len) {
++            len = fill(outbuf, UNCOM_BUFSZ);
++        } else {
++            for (int i = 0; i < len; i++) {
++                outbuf[i] = b[i];
++            }
++        }
++    }
++
++    if (pos) {
++        *pos = len;
++    }
++
++    free(buf ? NULL : b);
++    return 0;
++}
+-- 
+2.31.1
+
